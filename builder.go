@@ -2,136 +2,210 @@ package kustomizily
 
 import (
 	"bytes"
-	"fmt"
+	"encoding/base64"
+	"io"
 	"sort"
+
+	"gopkg.in/yaml.v3"
 )
 
-type configMapConfig struct {
-	name        string
-	namespace   string
-	labels      map[string]string
-	annotations map[string]string
-	immutable   bool
-	files       []string
+// Builder processes multi-document YAML manifests, splitting them into individual resources
+// and generating kustomization.yaml files for each directory. It calls writeFileFunc for
+// each generated file (both resource files and kustomization files). Returns an error if
+// any file operation fails or if YAML parsing fails.
+type Builder struct {
+	dirs map[string]*kustomizationBuilder
 }
 
-type secretConfig struct {
-	name        string
-	namespace   string
-	labels      map[string]string
-	annotations map[string]string
-	immutable   bool
-	files       []string
-	typ         string
-}
-
-type dirConfig struct {
-	resources  []string
-	configMaps []configMapConfig
-	secrets    []secretConfig
-}
-
-type kustomizationBuilder struct {
-	buf *bytes.Buffer
-}
-
-func newKustomizationBuilder() *kustomizationBuilder {
-	return &kustomizationBuilder{
-		buf: bytes.NewBufferString("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n"),
+// NewBuilder creates a new Builder instance for handling kustomization operations
+func NewBuilder() *Builder {
+	return &Builder{
+		dirs: map[string]*kustomizationBuilder{"": newKustomizationBuilder()},
 	}
 }
 
-func (k *kustomizationBuilder) Build() []byte {
-	return k.buf.Bytes()
-}
+// Process reads and processes multi-document YAML manifests from the provided reader.
+// It splits resources into appropriate directories and handles special resource types.
+func (b *Builder) Process(r io.Reader) error {
+	scanner := newScanner(r)
 
-func (k *kustomizationBuilder) WriteResources(resources []string) *kustomizationBuilder {
-	if len(resources) == 0 {
-		return k
-	}
+	for scanner.Scan() {
+		data := scanner.Bytes()
+		data = bytes.TrimSpace(data)
+		if len(data) == 0 {
+			continue
+		}
 
-	k.buf.WriteString("\nresources:\n")
-	sort.Strings(resources)
-	for _, name := range resources {
-		fmt.Fprintf(k.buf, "- %s\n", name)
-	}
-	return k
-}
+		obj, skip, err := parseYAMLObject(data)
+		if err != nil {
+			return err
+		}
+		if skip {
+			continue
+		}
 
-func (k *kustomizationBuilder) WriteConfigMapGenerator(configMaps []configMapConfig) *kustomizationBuilder {
-	if len(configMaps) == 0 {
-		return k
-	}
+		obj.Raw = cloneBytes(data)
 
-	k.buf.WriteString("\nconfigMapGenerator:\n")
-	for _, cm := range configMaps {
-		fmt.Fprintf(k.buf, "- name: %s\n", cm.name)
-		k.writeNamespace(cm.namespace)
-		k.writeFiles("files", cm.files)
-
-		k.buf.WriteString("  options:\n")
-		k.buf.WriteString("    disableNameSuffixHash: true\n")
-		k.writeMapFields("annotations", cm.annotations)
-		k.writeMapFields("labels", cm.labels)
-		k.writeBoolField("immutable", cm.immutable)
-	}
-	return k
-}
-
-func (k *kustomizationBuilder) WriteSecretGenerator(secrets []secretConfig) *kustomizationBuilder {
-	if len(secrets) == 0 {
-		return k
-	}
-
-	k.buf.WriteString("\nsecretGenerator:\n")
-	for _, s := range secrets {
-		fmt.Fprintf(k.buf, "- name: %s\n", s.name)
-		k.writeNamespace(s.namespace)
-		k.writeFiles("files", s.files)
-		k.writeField("type", s.typ)
-
-		k.buf.WriteString("  options:\n")
-		k.buf.WriteString("    disableNameSuffixHash: true\n")
-		k.writeMapFields("annotations", s.annotations)
-		k.writeMapFields("labels", s.labels)
-		k.writeBoolField("immutable", s.immutable)
-	}
-	return k
-}
-
-func (k *kustomizationBuilder) writeNamespace(namespace string) {
-	if namespace != "" {
-		fmt.Fprintf(k.buf, "  namespace: %s\n", namespace)
-	}
-}
-
-func (k *kustomizationBuilder) writeFiles(fieldName string, files []string) {
-	if len(files) > 0 {
-		fmt.Fprintf(k.buf, "  %s:\n", fieldName)
-		sort.Strings(files)
-		for _, f := range files {
-			fmt.Fprintf(k.buf, "  - %s\n", f)
+		if err := b.handleResourceType(&obj); err != nil {
+			return err
 		}
 	}
+	return nil
 }
 
-func (k *kustomizationBuilder) writeField(name, value string) {
-	if value != "" {
-		fmt.Fprintf(k.buf, "  %s: %s\n", name, value)
+func parseYAMLObject(data []byte) (k8sObject, bool, error) {
+	var obj k8sObject
+	if err := yaml.Unmarshal(data, &obj); err != nil {
+		return k8sObject{}, true, err
 	}
-}
-
-func (k *kustomizationBuilder) writeBoolField(name string, value bool) {
-	if value {
-		fmt.Fprintf(k.buf, "    %s: %t\n", name, value)
+	if obj.Kind == "" || obj.APIVersion == "" || obj.Metadata.Name == "" {
+		return k8sObject{}, true, nil
 	}
+	return obj, false, nil
 }
 
-func (k *kustomizationBuilder) writeMapFields(fieldName string, data map[string]string) {
-	if len(data) > 0 {
-		fmt.Fprintf(k.buf, "    %s:\n", fieldName)
-		for key, value := range data {
-			fmt.Fprintf(k.buf, "      %q: %q\n", key, value)
+func cloneBytes(data []byte) []byte {
+	clone := make([]byte, len(data))
+	copy(clone, data)
+	return clone
+}
+
+func (b *Builder) Build(writeFile func(dir string, name string, data []byte) error) error {
+	sortedDirs := make([]string, 0, len(b.dirs))
+	for dir := range b.dirs {
+		sortedDirs = append(sortedDirs, dir)
+	}
+	sort.Strings(sortedDirs)
+
+	for _, dir := range sortedDirs {
+		err := b.dirs[dir].Build(func(name string, data []byte) error {
+			return writeFile(dir, name, data)
+		})
+		if err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (b *Builder) getKustomization(obj *k8sObject) *kustomizationBuilder {
+	dir := getTargetDir(obj)
+	if _, exists := b.dirs[dir]; !exists {
+		b.dirs[dir] = newKustomizationBuilder()
+		b.dirs[""].AddResource(dir)
+	}
+	return b.dirs[dir]
+}
+
+func getTargetDir(obj *k8sObject) string {
+	if obj.APIVersion == "apiextensions.k8s.io/v1" && obj.Kind == "CustomResourceDefinition" {
+		return "crd"
+	}
+
+	labels := obj.Metadata.Labels
+	switch {
+	case labels["app.kubernetes.io/component"] != "":
+		return labels["app.kubernetes.io/component"]
+	case labels["component"] != "":
+		return labels["component"]
+	case labels["app.kubernetes.io/name"] != "":
+		return labels["app.kubernetes.io/name"]
+	case labels["app"] != "":
+		return labels["app"]
+	default:
+		return ""
+	}
+}
+
+func (b *Builder) handleResourceType(obj *k8sObject) error {
+	switch {
+	case obj.APIVersion == "v1" && obj.Kind == "ConfigMap":
+		return b.handleConfigMap(obj)
+	case obj.APIVersion == "v1" && obj.Kind == "Secret":
+		return b.handleSecret(obj)
+	default:
+		return b.handleGenericResource(obj)
+	}
+}
+
+func (b *Builder) handleConfigMap(obj *k8sObject) error {
+	fileGroup := &filesObject{
+		k8sObject: obj,
+		files:     make(map[string][]byte),
+	}
+
+	for key, value := range obj.Data {
+		fileGroup.files[key] = []byte(value)
+	}
+
+	for key, value := range obj.BinaryData {
+		data, err := base64.StdEncoding.DecodeString(value)
+		if err != nil {
+			return err
+		}
+		fileGroup.files[key] = data
+	}
+
+	b.getKustomization(obj).AddConfigMapObjects(fileGroup)
+	return nil
+}
+
+func (b *Builder) handleSecret(obj *k8sObject) error {
+	fileGroup := &filesObject{
+		k8sObject: obj,
+		files:     make(map[string][]byte),
+	}
+
+	for key, value := range obj.Data {
+		data, err := base64.StdEncoding.DecodeString(value)
+		if err != nil {
+			return err
+		}
+		fileGroup.files[key] = data
+	}
+
+	for key, value := range obj.StringData {
+		fileGroup.files[key] = []byte(value)
+	}
+
+	b.getKustomization(obj).AddSecretObjects(fileGroup)
+	return nil
+}
+
+func (b *Builder) handleGenericResource(obj *k8sObject) error {
+	b.getKustomization(obj).AddK8sObject(obj)
+	return nil
+}
+
+type metadata struct {
+	Namespace   string            `yaml:"namespace"`
+	Name        string            `yaml:"name"`
+	Labels      map[string]string `yaml:"labels"`
+	Annotations map[string]string `yaml:"annotations"`
+}
+
+type specNames struct {
+	Plural string `yaml:"plural"`
+}
+
+type spec struct {
+	// For CustomResourceDefinition
+	Group string    `yaml:"group"`
+	Names specNames `yaml:"names"`
+}
+
+type k8sObject struct {
+	Kind       string   `yaml:"kind"`
+	APIVersion string   `yaml:"apiVersion"`
+	Metadata   metadata `yaml:"metadata"`
+	Spec       spec     `yaml:"spec"`
+
+	// ConfigMap/Secret fields
+	Data       map[string]string `yaml:"data"`
+	BinaryData map[string]string `yaml:"binaryData"`
+	StringData map[string]string `yaml:"stringData"`
+	Immutable  bool              `yaml:"immutable"`
+	Type       string            `yaml:"type"`
+
+	Raw []byte
 }

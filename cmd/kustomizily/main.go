@@ -48,14 +48,14 @@ func main() {
 		reader = f
 	}
 
-	var writeFile kustomizily.WriteFileFunc
+	var writeFile func(dir string, name string, data []byte) error
 	if dryRun {
 		writeFile = kustomizily.NewDryRunFS(outputDir).WriteFile
 	} else {
 		writeFile = kustomizily.NewFS(outputDir).WriteFile
 	}
 
-	h := kustomizily.NewHandler(writeFile)
+	h := kustomizily.NewBuilder()
 
 	err := h.Process(reader)
 	if err != nil {
@@ -63,7 +63,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	err = h.Done()
+	err = h.Build(writeFile)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
