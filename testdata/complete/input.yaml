@@ -1,0 +1,130 @@
+---
+# Source: comment-only document, should be skipped
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: demo-operator
+  namespace: demo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: demo-worker
+  namespace: demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: demo-operator
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: demo-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: demo-operator
+subjects:
+- kind: ServiceAccount
+  name: demo-operator
+  namespace: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-controller
+  namespace: demo
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: myapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp-controller
+  template:
+    metadata:
+      labels:
+        app: myapp-controller
+    spec:
+      containers:
+      - name: controller
+        image: example.com/controller:v1.0.0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-controller
+  namespace: demo
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: myapp
+spec:
+  selector:
+    app: myapp-controller
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: myapp-controller-config
+  namespace: demo
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: myapp
+  annotations:
+    example.com/note: generated
+data:
+  config.yaml: |
+    verbosity: 2
+  rules.yaml: |
+    allow: all
+binaryData:
+  binary: aGVsbG8=
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: myapp-controller-token
+  namespace: demo
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: myapp
+type: Opaque
+immutable: true
+data:
+  token: c2VjcmV0
+stringData:
+  username: admin
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  names:
+    plural: widgets
+    singular: widget
+    kind: Widget
+  scope: Namespaced
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object

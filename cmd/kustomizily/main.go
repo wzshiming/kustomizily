@@ -19,18 +19,19 @@ func init() {
 	flag.StringVar(&inputFile, "i", "-", "Input k8s YAML file")
 	flag.StringVar(&outputDir, "o", "./kustomizily", "Output directory")
 	flag.BoolVar(&dryRun, "d", false, "Dry run mode")
-	flag.Parse()
 }
 
 func main() {
+	flag.Parse()
+
 	if flag.NArg() > 0 {
-		fmt.Println("Unrecognized arguments:")
+		fmt.Fprintln(os.Stderr, "Unrecognized arguments:", flag.Args())
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
 	if inputFile == "" {
-		fmt.Println("Input file is required")
+		fmt.Fprintln(os.Stderr, "Input file is required")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
@@ -41,7 +42,7 @@ func main() {
 	} else {
 		f, err := os.Open(inputFile)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		defer f.Close()
@@ -59,13 +60,13 @@ func main() {
 
 	err := h.Process(reader)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	err = h.Build(writeFile)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

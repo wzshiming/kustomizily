@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-controller
+  namespace: demo
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: myapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp-controller
+  template:
+    metadata:
+      labels:
+        app: myapp-controller
+    spec:
+      containers:
+      - name: controller
+        image: example.com/controller:v1.0.0

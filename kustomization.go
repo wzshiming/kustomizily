@@ -3,6 +3,8 @@ package kustomizily
 import (
 	"bytes"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -264,7 +266,9 @@ func (k *kustomizationBuilder) writeGenerators(buf *bytes.Buffer, generatorType 
 
 func (k *kustomizationBuilder) writeFiles(buf *bytes.Buffer, files map[string][]byte, filenameFunc func(obj *k8sObject, key string) string, k8sObj *k8sObject, writeFile func(name string, data []byte) error) error {
 	buf.WriteString("  files:\n")
-	for key, data := range files {
+	// sorted for deterministic output across runs
+	for _, key := range slices.Sorted(maps.Keys(files)) {
+		data := files[key]
 		name := filenameFunc(k8sObj, key)
 		if err := writeFile(name, data); err != nil {
 			return err
@@ -281,8 +285,8 @@ func (k *kustomizationBuilder) writeFiles(buf *bytes.Buffer, files map[string][]
 func (k *kustomizationBuilder) writeMapFields(buf *bytes.Buffer, fieldName string, data map[string]string) {
 	if len(data) > 0 {
 		fmt.Fprintf(buf, "    %s:\n", fieldName)
-		for key, value := range data {
-			fmt.Fprintf(buf, "      %q: %q\n", key, value)
+		for _, key := range slices.Sorted(maps.Keys(data)) {
+			fmt.Fprintf(buf, "      %q: %q\n", key, data[key])
 		}
 	}
 }
@@ -398,7 +402,7 @@ func trimPrefix(s string, prefix string) string {
 		return s
 	}
 	l := len(prefix)
-	for i := 0; i < l; i++ {
+	for i := range l {
 		if !charEqual(s[i], prefix[i]) {
 			return s
 		}

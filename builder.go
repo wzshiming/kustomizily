@@ -3,8 +3,10 @@ package kustomizily
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,7 +31,7 @@ func NewBuilder() *Builder {
 func (b *Builder) Process(r io.Reader) error {
 	scanner := newScanner(r)
 
-	for scanner.Scan() {
+	for i := 0; scanner.Scan(); i++ {
 		data := scanner.Bytes()
 		data = bytes.TrimSpace(data)
 		if len(data) == 0 {
@@ -38,7 +40,7 @@ func (b *Builder) Process(r io.Reader) error {
 
 		obj, skip, err := parseYAMLObject(data)
 		if err != nil {
-			return err
+			return fmt.Errorf("document %d: %w", i, err)
 		}
 		if skip {
 			continue
@@ -47,10 +49,10 @@ func (b *Builder) Process(r io.Reader) error {
 		obj.Raw = cloneBytes(data)
 
 		if err := b.handleResourceType(&obj); err != nil {
-			return err
+			return fmt.Errorf("document %d: %w", i, err)
 		}
 	}
-	return nil
+	return scanner.Err()
 }
 
 func parseYAMLObject(data []byte) (k8sObject, bool, error) {
@@ -82,7 +84,7 @@ func (b *Builder) Build(writeFile func(dir string, name string, data []byte) err
 			return writeFile(dir, name, data)
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("dir %q: %w", dir, err)
 		}
 	}
 	return nil
@@ -103,18 +105,22 @@ func getTargetDir(obj *k8sObject) string {
 	}
 
 	labels := obj.Metadata.Labels
+	var dir string
 	switch {
 	case labels["app.kubernetes.io/component"] != "":
-		return labels["app.kubernetes.io/component"]
+		dir = labels["app.kubernetes.io/component"]
 	case labels["component"] != "":
-		return labels["component"]
+		dir = labels["component"]
 	case labels["app.kubernetes.io/name"] != "":
-		return labels["app.kubernetes.io/name"]
+		dir = labels["app.kubernetes.io/name"]
 	case labels["app"] != "":
-		return labels["app"]
-	default:
+		dir = labels["app"]
+	}
+	// malformed label values must not become paths escaping the output root
+	if dir == "." || dir == ".." || strings.ContainsAny(dir, `/\`) {
 		return ""
 	}
+	return dir
 }
 
 func (b *Builder) handleResourceType(obj *k8sObject) error {
@@ -141,7 +147,7 @@ func (b *Builder) handleConfigMap(obj *k8sObject) error {
 	for key, value := range obj.BinaryData {
 		data, err := base64.StdEncoding.DecodeString(value)
 		if err != nil {
-			return err
+			return fmt.Errorf("configmap %s: binaryData key %q: %w", obj.Metadata.Name, key, err)
 		}
 		fileGroup.files[key] = data
 	}
@@ -159,7 +165,7 @@ func (b *Builder) handleSecret(obj *k8sObject) error {
 	for key, value := range obj.Data {
 		data, err := base64.StdEncoding.DecodeString(value)
 		if err != nil {
-			return err
+			return fmt.Errorf("secret %s: data key %q: %w", obj.Metadata.Name, key, err)
 		}
 		fileGroup.files[key] = data
 	}
