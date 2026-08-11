@@ -3,7 +3,7 @@ package kustomizily
 import (
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 // FS implements a file system writer that creates directories and files on disk.
@@ -21,11 +21,11 @@ func NewFS(root string) *FS {
 func (f *FS) WriteFile(dir string, name string, data []byte) error {
 	if _, ok := f.dirs[dir]; !ok {
 		f.dirs[dir] = struct{}{}
-		if err := os.MkdirAll(path.Join(f.root, dir), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(f.root, dir), 0755); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(path.Join(f.root, dir, name), data, 0644)
+	return os.WriteFile(filepath.Join(f.root, dir, name), data, 0644)
 }
 
 // DryRunFS implements a file system writer that simulates file operations,
@@ -45,8 +45,8 @@ func NewDryRunFS(root string) *DryRunFS {
 func (d *DryRunFS) WriteFile(dir string, name string, data []byte) error {
 	if _, ok := d.dirs[dir]; !ok {
 		d.dirs[dir] = struct{}{}
-		fmt.Println("mkdir", path.Join(d.root, dir))
+		fmt.Println("mkdir", filepath.Join(d.root, dir))
 	}
-	fmt.Println("write", path.Join(d.root, dir, name))
+	fmt.Println("write", filepath.Join(d.root, dir, name))
 	return nil
 }

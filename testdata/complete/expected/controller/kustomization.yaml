@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- deployment.yaml
+- service.yaml
+
+configMapGenerator:
+- name: myapp-controller-config
+  namespace: demo
+  options:
+    disableNameSuffixHash: true
+    annotations:
+      "example.com/note": "generated"
+    labels:
+      "app.kubernetes.io/component": "controller"
+      "app.kubernetes.io/instance": "myapp"
+  files:
+  - binary
+  - config.yaml
+  - rules.yaml
+
+secretGenerator:
+- name: myapp-controller-token
+  namespace: demo
+  type: Opaque
+  options:
+    disableNameSuffixHash: true
+    labels:
+      "app.kubernetes.io/component": "controller"
+      "app.kubernetes.io/instance": "myapp"
+    immutable: true
+  files:
+  - token
+  - username
