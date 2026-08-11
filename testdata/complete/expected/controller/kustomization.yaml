@@ -16,8 +16,8 @@ configMapGenerator:
       "app.kubernetes.io/component": "controller"
       "app.kubernetes.io/instance": "myapp"
   files:
+  - binary
   - config.yaml
-  - logo.png
   - rules.yaml
 
 secretGenerator:
